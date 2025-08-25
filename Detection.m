@@ -75,6 +75,10 @@ function plates = detectLicensePlate(imagePath)
                 imshow(plateRegion);
                 title(sprintf('Extracted Plate %d - Size: %.0fx%.0f', i, ...
                     plates(i).BoundingBox(3), plates(i).BoundingBox(4)));
+            % Save the cropped plate as an image file
+                filename = sprintf('plate_%d.png', i);  % e.g. plate_1.png, plate_2.png
+                imwrite(plateRegion, filename);
+
             end
         else
             fprintf('No license plates detected\n');
@@ -374,7 +378,7 @@ function batchDetection(imageFolder)
     end
 end
 
-plates = detectLicensePlate('Test_image5.jpg');
+plates = detectLicensePlate('Test_image12.jpg');
 
 % Then you can work with the results
 if ~isempty(plates)

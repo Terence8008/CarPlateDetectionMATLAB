@@ -1,0 +1,464 @@
+function [segmented_chars, binary_plate] = carplate_segmentation(image_path)
+% ENHANCED CAR PLATE CHARACTER SEGMENTATION
+% This function segments individual characters from a detected car plate image
+% Handles both dark-on-light and light-on-dark plates
+% Enhanced for sunlight reflection and various lighting conditions
+% 
+% Input:
+%   image_path - path to the car plate PNG image (optional)
+% 
+% Output:
+%   segmented_chars - cell array containing individual character images
+%   binary_plate - binary image of the processed plate
+
+    % Helper function for inline if-else
+    function result = iif(condition, true_val, false_val)
+        if condition
+            result = true_val;
+        else
+            result = false_val;
+        end
+    end
+
+    % Handle input image path
+    if nargin < 1 || isempty(image_path)
+        % Manual image path setting - modify this path as needed
+        image_path = 'Test_image'; % SET YOUR IMAGE PATH HERE
+        
+        % If manual path doesn't exist, use file dialog
+        if ~exist(image_path, 'file')
+            fprintf('Manual path not found. Please select an image file.\n');
+            [filename, pathname] = uigetfile({'*.png;*.jpg;*.jpeg;*.bmp', 'Image files (*.png, *.jpg, *.jpeg, *.bmp)'}, 'Select car plate image');
+            if filename == 0
+                error('No file selected');
+            end
+            image_path = fullfile(pathname, filename);
+        end
+    end
+    
+    % Verify image exists
+    if ~exist(image_path, 'file')
+        error('Image file not found: %s', image_path);
+    end
+    
+    % Load and display original image
+    original_img = imread(image_path);
+    figure('Name', 'Enhanced Car Plate Segmentation Process', 'Position', [100, 100, 1400, 900]);
+    
+    subplot(3, 4, 1);
+    imshow(original_img);
+    title('Original Plate Image');
+    
+    % Convert to grayscale if needed
+    if size(original_img, 3) == 3
+        gray_img = rgb2gray(original_img);
+    else
+        gray_img = original_img;
+    end
+    
+    subplot(3, 4, 2);
+    imshow(gray_img);
+    title('Grayscale Image');
+    
+    % Enhanced preprocessing for various lighting conditions
+    % Step 1: Noise reduction with bilateral filtering (preserves edges)
+    if exist('imbilatfilt', 'file') == 2
+        filtered_img = imbilatfilt(gray_img, 25, 10);
+    else
+        % Fallback if bilateral filter not available
+        filtered_img = medfilt2(gray_img, [3 3]);
+    end
+    
+    subplot(3, 4, 3);
+    imshow(filtered_img);
+    title('Noise Filtered');
+    
+    % Step 2: Contrast enhancement using CLAHE
+    enhanced_img = adapthisteq(filtered_img, 'ClipLimit', 0.02, 'Distribution', 'exponential');
+    
+    subplot(3, 4, 4);
+    imshow(enhanced_img);
+    title('Contrast Enhanced');
+    
+    % Step 3: Multiple thresholding approaches for robustness
+    % Method 1: Adaptive thresholding
+    binary1 = imbinarize(enhanced_img, 'adaptive', 'Sensitivity', 0.4, 'ForegroundPolarity', 'bright');
+    binary2 = imbinarize(enhanced_img, 'adaptive', 'Sensitivity', 0.6, 'ForegroundPolarity', 'dark');
+    
+    % Method 2: Otsu's method
+    binary3 = imbinarize(enhanced_img);
+    binary4 = ~imbinarize(enhanced_img); % Inverted
+    
+    % Method 3: Local thresholding for handling reflections
+    binary5 = imbinarize(enhanced_img, 'adaptive', 'Sensitivity', 0.3);
+    
+    subplot(3, 4, 5);
+    montage({binary1, binary2, binary3, binary4}, 'Size', [2 2]);
+    title('Different Thresholding Methods');
+    
+    % Combine multiple binary images to get the best result
+    % Use voting mechanism
+    combined = (double(binary1) + double(binary2) + double(binary3) + double(binary4) + double(binary5)) / 5;
+    binary_combined = combined > 0.4; % Threshold for voting
+    
+    % Smart polarity detection
+    % Count edge pixels to determine if characters are dark or light
+    edge_img = edge(enhanced_img, 'canny');
+    
+    % Sample center region of the image (likely to contain characters)
+    [h, w] = size(enhanced_img);
+    center_region = enhanced_img(round(h*0.3):round(h*0.7), round(w*0.1):round(w*0.9));
+    
+    % Calculate mean intensity of center region
+    center_mean = mean(center_region(:));
+    overall_mean = mean(enhanced_img(:));
+    
+    % Determine polarity based on intensity analysis
+    if center_mean < overall_mean - 20
+        % Characters appear darker than background
+        binary_plate = ~imbinarize(enhanced_img, 'adaptive', 'Sensitivity', 0.5, 'ForegroundPolarity', 'dark');
+    else
+        % Characters appear lighter than background
+        binary_plate = imbinarize(enhanced_img, 'adaptive', 'Sensitivity', 0.5, 'ForegroundPolarity', 'bright');
+    end
+    
+    % Additional check: if too much or too little is foreground, try the other polarity
+    foreground_ratio = sum(binary_plate(:)) / numel(binary_plate);
+    if foreground_ratio > 0.7 || foreground_ratio < 0.05
+        binary_plate = ~binary_plate;
+    end
+    
+    subplot(3, 4, 6);
+    imshow(binary_plate);
+    title('Smart Polarity Detection');
+    
+    % Enhanced morphological operations
+    % Create multiple structuring elements for different orientations
+    se_horizontal = strel('rectangle', [1, 3]);
+    se_vertical = strel('rectangle', [3, 1]);
+    se_diagonal1 = strel('line', 3, 45);
+    se_diagonal2 = strel('line', 3, -45);
+    se_disk = strel('disk', 1);
+    
+    % Progressive morphological operations
+    binary_plate = imclose(binary_plate, se_horizontal); % Connect horizontal gaps
+    binary_plate = imclose(binary_plate, se_vertical);   % Connect vertical gaps
+    
+    % Fill small holes within characters
+    binary_plate = imfill(binary_plate, 'holes');
+    
+    % Remove noise while preserving character structure
+    binary_plate = imopen(binary_plate, se_disk);
+    
+    % Remove very small components
+    binary_plate = bwareaopen(binary_plate, 25);
+    
+    subplot(3, 4, 7);
+    imshow(binary_plate);
+    title('Morphologically Cleaned');
+    
+    % Find connected components with 8-connectivity
+    [labeled_img, num_objects] = bwlabel(binary_plate, 8);
+    stats = regionprops(labeled_img, 'BoundingBox', 'Area', 'Extent', 'Solidity', ...
+                       'Eccentricity', 'ConvexArea', 'FilledArea', 'EulerNumber');
+    
+    % Enhanced character filtering with multiple criteria
+    valid_chars = [];
+    
+    % Get image dimensions for relative size filtering
+    img_height = size(binary_plate, 1);
+    img_width = size(binary_plate, 2);
+    
+    % Adaptive thresholds based on image size
+    min_area = max(30, img_height * img_width * 0.001);
+    max_area = img_height * img_width * 0.15;
+    min_height = img_height * 0.15;
+    max_height = img_height * 0.85;
+    min_width = img_width * 0.008;
+    max_width = img_width * 0.25;
+    
+    % Character aspect ratio range (more flexible)
+    min_aspect_ratio = 0.1;
+    max_aspect_ratio = 2.0;
+    
+    % Other shape criteria
+    min_extent = 0.2;
+    min_solidity = 0.25;
+    max_eccentricity = 0.98;
+    
+    fprintf('\n=== ENHANCED FILTERING CRITERIA ===\n');
+    fprintf('Image size: %dx%d\n', img_height, img_width);
+    fprintf('Area range: %d - %d\n', round(min_area), round(max_area));
+    fprintf('Height range: %.1f - %.1f\n', min_height, max_height);
+    fprintf('Width range: %.1f - %.1f\n', min_width, max_width);
+    
+    for i = 1:num_objects
+        area = stats(i).Area;
+        bbox = stats(i).BoundingBox;
+        width = bbox(3);
+        height = bbox(4);
+        aspect_ratio = width / height;
+        extent = stats(i).Extent;
+        solidity = stats(i).Solidity;
+        eccentricity = stats(i).Eccentricity;
+        
+        % Multi-criteria filtering
+        criteria_met = 0;
+        total_criteria = 9;
+        
+        % Size criteria
+        if area >= min_area && area <= max_area, criteria_met = criteria_met + 1; end
+        if height >= min_height && height <= max_height, criteria_met = criteria_met + 1; end
+        if width >= min_width && width <= max_width, criteria_met = criteria_met + 1; end
+        
+        % Shape criteria
+        if aspect_ratio >= min_aspect_ratio && aspect_ratio <= max_aspect_ratio, criteria_met = criteria_met + 1; end
+        if extent >= min_extent, criteria_met = criteria_met + 1; end
+        if solidity >= min_solidity, criteria_met = criteria_met + 1; end
+        if eccentricity <= max_eccentricity, criteria_met = criteria_met + 1; end
+        
+        % Minimum pixel dimensions
+        if width > 3 && height > 8, criteria_met = criteria_met + 1; end
+        
+        % Euler number check (should be reasonable for characters)
+        if stats(i).EulerNumber >= -2 && stats(i).EulerNumber <= 1, criteria_met = criteria_met + 1; end
+        
+        % Accept if most criteria are met (flexible approach)
+        if criteria_met >= 6 % At least 6 out of 9 criteria
+            valid_chars = [valid_chars, i];
+        end
+    end
+    
+    % Sort characters from left to right
+    if ~isempty(valid_chars)
+        char_centers = [];
+        for i = 1:length(valid_chars)
+            bbox = stats(valid_chars(i)).BoundingBox;
+            char_centers = [char_centers, bbox(1) + bbox(3)/2]; % X-center
+        end
+        [~, sort_idx] = sort(char_centers);
+        valid_chars = valid_chars(sort_idx);
+    end
+    
+    % Extract individual characters with improved bounding boxes
+    segmented_chars = {};
+    subplot(3, 4, 8);
+    imshow(binary_plate);
+    title('Detected Characters');
+    hold on;
+    
+    for i = 1:length(valid_chars)
+        % Get bounding box
+        bbox = stats(valid_chars(i)).BoundingBox;
+        x = round(bbox(1));
+        y = round(bbox(2));
+        width = round(bbox(3));
+        height = round(bbox(4));
+        
+        % Adaptive padding based on character size
+        padding_x = max(1, round(width * 0.1));
+        padding_y = max(1, round(height * 0.1));
+        
+        % Extract character region with padding
+        x1 = max(1, x - padding_x);
+        y1 = max(1, y - padding_y);
+        x2 = min(size(binary_plate, 2), x + width + padding_x);
+        y2 = min(size(binary_plate, 1), y + height + padding_y);
+        
+        char_img = binary_plate(y1:y2, x1:x2);
+        
+        % Enhanced preprocessing for individual characters
+        % Remove border noise
+        char_img = imclearborder(char_img);
+        
+        % Fill holes within the character
+        char_img = imfill(char_img, 'holes');
+        
+        % Resize character to standard size for consistency
+        char_img_resized = imresize(char_img, [64, 48], 'nearest'); % Slightly larger for better quality
+        
+        segmented_chars{i} = char_img_resized;
+        
+        % Draw bounding box on the display
+        rectangle('Position', [x, y, width, height], 'EdgeColor', 'g', 'LineWidth', 2);
+        text(x, y-8, sprintf('%d', i), 'Color', 'red', 'FontSize', 14, 'FontWeight', 'bold', 'BackgroundColor', 'white');
+    end
+    hold off;
+    
+    % Display segmented characters
+    if ~isempty(segmented_chars)
+        subplot(3, 4, 9);
+        % Create a montage of all characters
+        montage_img = [];
+        separator = ones(64, 5); % White separator
+        
+        for i = 1:length(segmented_chars)
+            if i == 1
+                montage_img = segmented_chars{i};
+            else
+                montage_img = [montage_img, separator, segmented_chars{i}];
+            end
+        end
+        
+        if ~isempty(montage_img)
+            imshow(montage_img);
+        end
+        title(sprintf('Segmented Characters (%d found)', length(segmented_chars)));
+        
+        % Individual character display
+        subplot(3, 4, 10);
+        if length(segmented_chars) >= 1
+            imshow(segmented_chars{1});
+            title('First Character');
+        end
+        
+        subplot(3, 4, 11);
+        if length(segmented_chars) >= 2
+            imshow(segmented_chars{2});
+            title('Second Character');
+        end
+        
+        subplot(3, 4, 12);
+        if length(segmented_chars) >= 3
+            imshow(segmented_chars{3});
+            title('Third Character');
+        end
+        
+    else
+        subplot(3, 4, 9);
+        text(0.5, 0.5, 'No characters detected', 'HorizontalAlignment', 'center');
+        title('No Characters Found');
+    end
+    
+    % Enhanced analysis output
+    fprintf('\n=== ENHANCED ANALYSIS RESULTS ===\n');
+    fprintf('Detection method: Smart polarity with multi-criteria filtering\n');
+    fprintf('Center region mean intensity: %.1f\n', center_mean);
+    fprintf('Overall mean intensity: %.1f\n', overall_mean);
+    fprintf('Foreground ratio: %.3f\n', foreground_ratio);
+    fprintf('Total objects found: %d\n', num_objects);
+    fprintf('Valid characters detected: %d\n', length(segmented_chars));
+    
+    % Detailed object analysis
+    fprintf('\n=== DETAILED OBJECT ANALYSIS ===\n');
+    for i = 1:min(num_objects, 15) % Limit output for readability
+        area = stats(i).Area;
+        bbox = stats(i).BoundingBox;
+        width = bbox(3);
+        height = bbox(4);
+        aspect_ratio = width / height;
+        extent = stats(i).Extent;
+        solidity = stats(i).Solidity;
+        eccentricity = stats(i).Eccentricity;
+        
+        is_valid = ismember(i, valid_chars);
+        
+        fprintf('Obj %2d: A=%4d, W=%5.1f, H=%5.1f, AR=%4.2f, Ext=%4.2f, Sol=%4.2f, Ecc=%4.2f %s\n', ...
+                i, round(area), width, height, aspect_ratio, extent, solidity, eccentricity, ...
+                iif(is_valid, '[VALID]', '[rejected]'));
+    end
+    
+    if num_objects > 15
+        fprintf('... (%d more objects)\n', num_objects - 15);
+    end
+    
+    % Save results
+    [pathstr, name, ~] = fileparts(image_path);
+    if isempty(pathstr)
+        pathstr = pwd;
+    end
+    
+    output_dir = fullfile(pathstr, [name '_enhanced_characters']);
+    if ~exist(output_dir, 'dir')
+        mkdir(output_dir);
+    end
+    
+    fprintf('\n=== SAVING RESULTS ===\n');
+    fprintf('Output directory: %s\n', output_dir);
+    
+    % Save binary plate image
+    imwrite(binary_plate, fullfile(output_dir, 'binary_plate.png'));
+    
+    % Save individual characters
+    for i = 1:length(segmented_chars)
+        filename = fullfile(output_dir, sprintf('char_%02d.png', i));
+        imwrite(segmented_chars{i}, filename);
+        fprintf('Saved: char_%02d.png (size: %dx%d)\n', i, size(segmented_chars{i}, 1), size(segmented_chars{i}, 2));
+    end
+    
+    fprintf('\nSegmentation completed successfully!\n');
+    
+end
+
+%% MAIN EXECUTION SCRIPT
+% This allows the file to be run directly
+
+% Clear workspace
+clear; clc; close all;
+
+fprintf('Enhanced Car Plate Character Segmentation\n');
+fprintf('=========================================\n');
+
+try
+    % Method 1: Set your image path manually here
+    manual_image_path = 'your_carplate_image.png'; % CHANGE THIS PATH
+    
+    % Method 2: Or leave empty to use file dialog
+    % manual_image_path = '';
+    
+    if exist('manual_image_path', 'var') && ~isempty(manual_image_path) && exist(manual_image_path, 'file')
+        fprintf('Using manual image path: %s\n', manual_image_path);
+        [chars, binary_img] = carplate_segmentation(manual_image_path);
+    else
+        fprintf('Manual path not found. Using file dialog...\n');
+        [chars, binary_img] = carplate_segmentation();
+    end
+    
+    fprintf('\n=== FINAL RESULTS ===\n');
+    fprintf('Segmentation completed successfully!\n');
+    fprintf('Number of characters detected: %d\n', length(chars));
+    
+    if ~isempty(chars)
+        fprintf('Character dimensions: %dx%d (standardized)\n', size(chars{1}, 1), size(chars{1}, 2));
+        fprintf('Characters saved to output directory.\n');
+        fprintf('Binary plate image saved as binary_plate.png\n');
+    end
+    
+catch ME
+    fprintf('Error during segmentation: %s\n', ME.message);
+    fprintf('Line: %d\n', ME.stack(1).line);
+    fprintf('Please check your image path and file format.\n');
+end
+
+%% DEMO FUNCTION
+function run_demo()
+    % Demo function for testing
+    fprintf('\n=== DEMO MODE ===\n');
+    fprintf('This demo will process a sample car plate image.\n');
+    
+    try
+        [chars, binary_img] = carplate_segmentation();
+        
+        if ~isempty(chars)
+            fprintf('Demo completed successfully!\n');
+            fprintf('Found %d characters\n', length(chars));
+            
+            % Display some statistics
+            fprintf('\nCharacter Statistics:\n');
+            for i = 1:length(chars)
+                char_pixels = sum(chars{i}(:));
+                total_pixels = numel(chars{i});
+                density = char_pixels / total_pixels;
+                fprintf('Character %d: %.1f%% filled\n', i, density * 100);
+            end
+        else
+            fprintf('No characters detected. Try adjusting the image or parameters.\n');
+        end
+        
+    catch ME
+        fprintf('Demo failed: %s\n', ME.message);
+    end
+end
+
+% Uncomment to run demo instead of main script
+% run_demo();
