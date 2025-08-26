@@ -63,10 +63,10 @@ function [segmented_chars, binary_plate] = carplate_segmentation(image_path)
     
     % Smart thresholding - try multiple methods
     % Method 1: Adaptive with bright characters
-    binary1 = imbinarize(enhanced_img, 'adaptive', 'Sensitivity', 0.3, 'ForegroundPolarity', 'bright');
+    binary1 = imbinarize(enhanced_img, 'adaptive', 'Sensitivity', 0.4, 'ForegroundPolarity', 'bright');
     
     % Method 2: Adaptive with dark characters  
-    binary2 = imbinarize(enhanced_img, 'adaptive', 'Sensitivity', 0.35, 'ForegroundPolarity', 'dark');
+    binary2 = imbinarize(enhanced_img, 'adaptive', 'Sensitivity', 0.4, 'ForegroundPolarity', 'dark');
     
     % Method 3: Global Otsu
     binary3 = imbinarize(enhanced_img);
@@ -103,7 +103,7 @@ function [segmented_chars, binary_plate] = carplate_segmentation(image_path)
             char_width = bbox(3);
             
             % Check if component looks like a character
-            if area > 50 && area < h*w*0.18 && char_height > h*0.15 && ...
+            if area > 50 && area < h*w*0.15 && char_height > h*0.15 && ...
                char_height < h*0.85 && char_width > 5 && char_width < w*0.25
                 valid_count = valid_count + 1;
             end
@@ -208,7 +208,8 @@ function [segmented_chars, binary_plate] = carplate_segmentation(image_path)
         valid_chars = valid_chars(sort_idx);
     end
     
-    % Extract characters with MINIMAL processing
+    % Extract characters from ORIGINAL GRAYSCALE IMAGE (not binary)
+    % This preserves intensity information needed for OCR
     segmented_chars = {};
     subplot(3, 4, 8);
     imshow(binary_plate);
@@ -223,17 +224,18 @@ function [segmented_chars, binary_plate] = carplate_segmentation(image_path)
         height = round(bbox(4));
         
         % Minimal padding
-        padding = 1;
+        padding = 2;
         x1 = max(1, x - padding);
         y1 = max(1, y - padding);
-        x2 = min(size(binary_plate, 2), x + width + padding);
-        y2 = min(size(binary_plate, 1), y + height + padding);
+        x2 = min(size(enhanced_img, 2), x + width + padding);
+        y2 = min(size(enhanced_img, 1), y + height + padding);
         
-        % Extract character region - NO additional processing
-        char_img = binary_plate(y1:y2, x1:x2);
+        % Extract character from ENHANCED GRAYSCALE IMAGE (not binary)
+        % This preserves intensity gradients and details needed for OCR
+        char_img = enhanced_img(y1:y2, x1:x2);
         
-        % Resize to standard size with proper interpolation
-        char_img_resized = imresize(char_img, [64, 48], 'nearest');
+        % Resize to standard size with proper interpolation for grayscale
+        char_img_resized = imresize(char_img, [64, 48], 'bilinear');
         
         segmented_chars{i} = char_img_resized;
         
@@ -243,12 +245,12 @@ function [segmented_chars, binary_plate] = carplate_segmentation(image_path)
     end
     hold off;
     
-    % Display results
+    % Display results - showing GRAYSCALE character images
     if ~isempty(segmented_chars)
         subplot(3, 4, 9);
-        % Create montage
+        % Create montage of grayscale characters
         montage_img = [];
-        separator = ones(64, 3);
+        separator = ones(64, 3) * 128; % Gray separator instead of white
         
         for i = 1:length(segmented_chars)
             if i == 1
@@ -259,27 +261,27 @@ function [segmented_chars, binary_plate] = carplate_segmentation(image_path)
         end
         
         if ~isempty(montage_img)
-            imshow(montage_img);
+            imshow(montage_img, []);
         end
-        title(sprintf('Segmented Characters (%d found)', length(segmented_chars)));
+        title(sprintf('Segmented Characters - Grayscale (%d found)', length(segmented_chars)));
         
-        % Show individual characters
+        % Show individual grayscale characters
         subplot(3, 4, 10);
         if length(segmented_chars) >= 1
-            imshow(segmented_chars{1});
-            title('First Character');
+            imshow(segmented_chars{1}, []);
+            title('First Character (Grayscale)');
         end
         
         subplot(3, 4, 11);
         if length(segmented_chars) >= 2
-            imshow(segmented_chars{2});
-            title('Second Character');
+            imshow(segmented_chars{2}, []);
+            title('Second Character (Grayscale)');
         end
         
         subplot(3, 4, 12);
         if length(segmented_chars) >= 3
-            imshow(segmented_chars{3});
-            title('Third Character');
+            imshow(segmented_chars{3}, []);
+            title('Third Character (Grayscale)');
         end
     else
         subplot(3, 4, 9);
@@ -322,10 +324,12 @@ function [segmented_chars, binary_plate] = carplate_segmentation(image_path)
     
     imwrite(binary_plate, fullfile(output_dir, 'binary_plate.png'));
     
+    % Save grayscale character images (suitable for OCR)
     for i = 1:length(segmented_chars)
         filename = fullfile(output_dir, sprintf('char_%02d.png', i));
+        % Save as grayscale image with proper intensity scaling
         imwrite(segmented_chars{i}, filename);
-        fprintf('Saved: char_%02d.png\n', i);
+        fprintf('Saved: char_%02d.png (grayscale, %dx%d)\n', i, size(segmented_chars{i}, 1), size(segmented_chars{i}, 2));
     end
     
     fprintf('\nSegmentation completed successfully!\n');
@@ -353,8 +357,8 @@ try
     fprintf('Number of characters detected: %d\n', length(chars));
     
     if ~isempty(chars)
-        fprintf('Character size: %dx%d pixels\n', size(chars{1}, 1), size(chars{1}, 2));
-        fprintf('All files saved to output directory.\n');
+        fprintf('Character size: %dx%d pixels (grayscale for OCR)\n', size(chars{1}, 1), size(chars{1}, 2));
+        fprintf('Characters saved as grayscale images suitable for OCR.\n');
     end
     
 catch ME
