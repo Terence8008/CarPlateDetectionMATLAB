@@ -1,0 +1,39 @@
+function text = carplate_ocr(chars)
+    text = '';
+    fprintf('\n Using Built-in OCR = \n');
+    
+    for i = 1:length(chars)
+        char = double(chars{i});
+
+         % Fix polarity (OCR needs black text on white background)
+        if mean(char(:)) > 0.5
+            char = 1 - char;  % Invert
+        end
+        
+        char_padded = padarray(char, [15, 15], 1, 'both');
+        % Convert to RGB
+        char_img_rgb = cat(3, char_padded, char_padded, char_padded);
+        
+        % Scale up more
+        char_img_scaled = imresize(char_img_rgb, 8, 'bilinear');
+        
+        % Convert to uint8
+        char_img_final = uint8(char_img_scaled * 255);
+
+        char_img_selected = imresize(char_img_rgb, 4, 'nearest');
+
+        ocr_result = ocr(char_img_selected, 'CharacterSet', '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ');
+
+        if ~isempty(ocr_result.Text)
+            recognized_char = strtrim(ocr_result.Text);
+            recognized_char = recognized_char(1);
+            text = [text, recognized_char];
+            fprintf('Character %d: %s (Confidence: %.2f)\n', i, recognized_char, ocr_result.CharacterConfidences(1));
+            else
+                text = [text, '?'];
+                fprintf('Character %d: ? (No recognition)\n', i);
+            end
+        end
+    end
+
+    recognized_text = carplate_ocr(chars);
