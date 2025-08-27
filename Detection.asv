@@ -378,7 +378,7 @@ function batchDetection(imageFolder)
     end
 end
 
-plates = detectLicensePlate('Custom7.jpg');
+plates = detectLicensePlate('.jpg');
 
 % Then you can work with the results
 if ~isempty(plates)
